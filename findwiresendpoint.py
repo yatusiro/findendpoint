@@ -6,100 +6,95 @@ from collections import defaultdict
 def detect_insertions(
         img_path: str | Path,
         *,
-        canny_thresh1: int = 50,
-        canny_thresh2: int = 150,
-        hough_thresh: int = 60,
-        min_line_len: int = 120,       # ★直线最短长度阈值（像素）
-        max_line_gap: int = 20,        # 同一直线段允许的最大间断
-        angle_tol_deg: float = 4.0,    # (ρ,θ) 聚类时的角度容差
-        rho_tol_px: float = 12.0,      # (ρ,θ) 聚类时的距离容差
-        dot_radius: int = 4,           # 红点半径
-        bgr_dot: tuple[int,int,int] = (0, 0, 255),
-        merge_dist_px: int = 6,        # 近邻端点再次合并阈值
+        canny1: int = 50,
+        canny2: int = 150,
+        hough_thresh: int = 40,      # ↓ 适度降低
+        min_len: int = 60,           # ↓ 允许更短的线段
+        max_gap: int = 25,
+        angle_tol_deg: float = 6.0,  # ↑ 放宽角度容差
+        rho_tol_px: float = 15.0,    # ↑ 放宽距离容差
+        min_cluster_height: int = 80,# ★聚类后，总垂直跨度须≥该值
+        merge_dist_px: int = 8,
+        dot_r: int = 4,
+        bgr_dot: tuple[int,int,int] = (0,0,255),
 ):
     """
-    检测斜向线缆的“插入端”，并返回坐标与标注后图像。
-
-    返回
-    ----
-    coords : list[(x, y)]
-        以图片左下角为 (0,0) 的插入点坐标。
-    annot  : np.ndarray
-        已画出红点的 BGR 图像。
+    返回 (坐标列表, 标注后图像)；坐标系左下为 (0,0)。
     """
     img_path = Path(img_path)
-    img   = cv2.imread(str(img_path))
-    gray  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    h, w  = gray.shape
+    img  = cv2.imread(str(img_path))
+    if img is None:
+        raise FileNotFoundError(img_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
 
-    # 1) Canny 边缘检测
-    edges = cv2.Canny(gray, canny_thresh1, canny_thresh2, apertureSize=3)
+    # 1) Canny
+    edges = cv2.Canny(gray, canny1, canny2, apertureSize=3)
 
-    # 2) 概率霍夫直线检测
+    # 2) 概率霍夫
     lines = cv2.HoughLinesP(
         edges, 1, np.pi/180,
         threshold=hough_thresh,
-        minLineLength=min_line_len,
-        maxLineGap=max_line_gap
+        minLineLength=min_len,
+        maxLineGap=max_gap
     )
     if lines is None:
         return [], img.copy()
 
-    # 3) 用 (ρ,θ) 对直线进行粗聚类，归并同一根线缆
-    buckets = defaultdict(list)              # key -> 该线缆的所有线段
-    for x1, y1, x2, y2 in lines[:, 0]:
-        theta = np.mod(np.arctan2(y2 - y1, x2 - x1), np.pi)  # 角度 ∈ [0, π)
+    # 3) 用 (ρ,θ) 聚类
+    buckets = defaultdict(list)
+    for x1,y1,x2,y2 in lines[:,0]:
+        theta = np.mod(np.arctan2(y2-y1, x2-x1), np.pi)
         deg   = np.degrees(theta)
-        if not (15 < deg < 75):              # 过滤掉水平或垂直干扰
+        if not (15 < deg < 75):  # 依然过滤水平垂直
             continue
+        rho = x1*np.cos(theta) + y1*np.sin(theta)
+        key = (round(theta/np.deg2rad(angle_tol_deg)),
+               round(rho/rho_tol_px))
+        buckets[key].append(((x1,y1),(x2,y2)))
 
-        rho = x1 * np.cos(theta) + y1 * np.sin(theta)        # 直线极坐标 ρ
-        key = (round(theta / np.deg2rad(angle_tol_deg)),
-               round(rho / rho_tol_px))
-        buckets[key].append(((x1, y1), (x2, y2)))
-
-    # 4) 对每个线缆聚类，仅保留最靠下（y 最大）的端点
-    endpoints = []
+    endpoints, cluster_heights = [], []
     for segs in buckets.values():
-        all_pts = [p for seg in segs for p in seg]
-        px, py = max(all_pts, key=lambda p: p[1])  # y 最大即最底端
-        endpoints.append((px, py))
+        pts = [p for s in segs for p in s]
+        ys  = [p[1] for p in pts]
+        height = max(ys) - min(ys)  # 该簇的总垂直跨度
+        cluster_heights.append(height)
+        if height < min_cluster_height:   # ★太短 → 噪声
+            continue
+        # 插入点 = y 最大的端点
+        endpoints.append(max(pts, key=lambda p: p[1]))
 
     if not endpoints:
         return [], img.copy()
 
-    # 5) 再次合并彼此过近的端点（避免重复）
-    pts    = np.array(endpoints, dtype=float)
+    # 4) 距离再次合并
+    P      = np.array(endpoints, float)
     merged = []
-    used   = np.zeros(len(pts), bool)
-    for i, p in enumerate(pts):
-        if used[i]:
-            continue
-        cluster = [p]
-        used[i] = True
-        dist    = np.linalg.norm(pts - p, axis=1)
-        for j in np.where((dist < merge_dist_px) & (~used))[0]:
-            cluster.append(pts[j]); used[j] = True
-        merged.append(np.mean(cluster, axis=0))
-    merged = np.array(merged, dtype=int)
+    used   = np.zeros(len(P), bool)
+    for i, p in enumerate(P):
+        if used[i]: continue
+        close = np.linalg.norm(P - p, axis=1) < merge_dist_px
+        group = P[close]
+        used[close] = True
+        merged.append(group.mean(axis=0))
+    merged = np.array(merged, int)
 
-    # 6) 在图上画红点，并转换坐标系
-    annot  = img.copy()
-    coords = []
+    # 5) 标注与坐标转换
+    annot, coords = img.copy(), []
     for x, y in merged:
-        cv2.circle(annot, (x, y), dot_radius, bgr_dot, -1)
-        coords.append((int(x), int(h - 1 - y)))   # 翻转 y 轴
+        cv2.circle(annot, (x,y), dot_r, bgr_dot, -1)
+        coords.append((int(x), int(h-1-y)))  # 左下原点
 
     return coords, annot
 
 
-# ----------------- 批量处理示例 -----------------
+# 批量示例
 if __name__ == "__main__":
-    src_dir = Path("./samples")     # 输入文件夹
-    dst_dir = Path("./annotated2")  # 输出文件夹
-    dst_dir.mkdir(exist_ok=True)
+    src = Path("./samples")
+    dst = Path("./annotated")
+    dst.mkdir(exist_ok=True)
 
-    for img_file in src_dir.glob("*.jpg"):
-        pts, annotated_img = detect_insertions(img_file)
-        print(img_file.name, pts)
-        cv2.imwrite(str(dst_dir / img_file.name), annotated_img)
+    for f in src.glob("*.jpg"):
+        pts, out = detect_insertions(f)
+        print(f"{f.name}: {len(pts)} 点 ->", pts)
+        cv2.imwrite(str(dst/f.name), out)
