@@ -135,16 +135,20 @@ if __name__ == "__main__":
         image = Image.open(path)
         success, pt1, pt2 = detector.detect(image)
 
+        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        save_path = os.path.join("output2", os.path.basename(path))
+
         if success:
             print(f"{path} → 检测成功: {pt1}, {pt2}")
-            img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
             H, W = img_cv.shape[:2]
             cx, cy = W // 2, H // 2
             x1, y1 = int(cx + pt1[0]), int(cy - pt1[1])
             x2, y2 = int(cx + pt2[0]), int(cy - pt2[1])
             cv2.circle(img_cv, (x1, y1), 6, (0, 0, 255), -1)  # 红点
             cv2.circle(img_cv, (x2, y2), 6, (0, 255, 0), -1)  # 绿点
-            save_path = os.path.join("output2", os.path.basename(path))
-            cv2.imwrite(save_path, img_cv)
         else:
             print(f"{path} → 未检测到端点")
+            # 原图保存，无标记
+
+        cv2.imwrite(save_path, img_cv)  # 不管是否检测成功都保存
+
