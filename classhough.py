@@ -33,7 +33,10 @@ class WireEndpointDetector:
                 cv2.drawContours(cv_image, [cnt], -1, (0, 0, 255), thickness=cv2.FILLED)
         return Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
 
-    def detect_endpoints(self, img_pil: Image.Image) -> Tuple[Image.Image, List[Tuple[float, float, float, float]]]:
+    def detect_endpoints(self, img_pil: Image.Image) -> Tuple[Image.Image, Tuple[float, float]]:
+        """
+        返回图像中心为原点下，不在边缘区域的最接近原点的一个端点坐标。
+        """
         bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         H, W = bgr.shape[:2]
         cx, cy = W // 2.0, H // 2.0
@@ -50,7 +53,7 @@ class WireEndpointDetector:
                                    minLineLength=self.min_len,
                                    maxLineGap=self.max_gap)
         if segments is None:
-            return img_pil.copy(), []
+            return img_pil.copy(), (None, None)
 
         segs = segments[:, 0]
         groups = []
@@ -72,11 +75,13 @@ class WireEndpointDetector:
             else:
                 groups.append([theta, rho, [(x1, y1, x2, y2)]])
 
-        endpoints, keep_pairs = [], []
         top_band = self.edge_pct * H
         bottom_band = (1 - self.edge_pct) * H
         left_thr = self.side_pct * W
         right_thr = (1 - self.side_pct) * W
+
+        closest_point = None
+        min_dist = float('inf')
 
         for _, _, gsegs in groups:
             pts = np.array([(x1, y1) for x1, y1, _, _ in gsegs] +
@@ -95,26 +100,24 @@ class WireEndpointDetector:
             if not (in_left ^ in_right):
                 continue
 
-            endpoints.append((x1 - cx, cy - y1, x2 - cx, cy - y2))
-            keep_pairs.append(((x1, y1), (x2, y2)))
+            pt1 = (x1 - cx, cy - y1)
+            pt2 = (x2 - cx, cy - y2)
 
-        vis = bgr.copy()
-        for (p1, p2) in keep_pairs:
-            for (x, y) in (p1, p2):
-                cv2.circle(vis, (int(x), int(y)), self.dot_radius, (255, 0, 0), -1)
+            for pt in [pt1, pt2]:
+                if abs(pt[0]) > (self.side_pct * W / 2):  # 不在边缘区
+                    dist = pt[0] ** 2 + pt[1] ** 2
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_point = pt
 
-        return Image.fromarray(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)), endpoints
+        return img_pil.copy(), closest_point if closest_point else (None, None)
 
-    def run_on_folder(self, folder_path: str, output_folder: str):
-        os.makedirs(output_folder, exist_ok=True)
-        jpg_files = glob.glob(os.path.join(folder_path, "*.jpg"))
-        for path in jpg_files:
-            print(f"Processing {path}")
-            img = Image.open(path)
-            processed_img = self.preprocess_image(img)
-            annotated, _ = self.detect_endpoints(processed_img)
-            name, ext = os.path.splitext(os.path.basename(path))
-            output_path = os.path.join(output_folder, f"{name}_processed{ext}")
-            annotated.save(output_path)
+
+
+    def detect(self, image: Image.Image) -> Tuple[float, float]:
+        processed = self.preprocess_image(image)
+        _, point = self.detect_endpoints(processed)
+        return point
+
 
 
