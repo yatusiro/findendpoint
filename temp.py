@@ -128,27 +128,37 @@ class ProbabilisticHough:
 
 if __name__ == "__main__":
     os.makedirs("output2", exist_ok=True)
+    os.makedirs("output3", exist_ok=True)
     detector = ProbabilisticHough()
 
     image_paths = glob.glob("segment/boat/*.jpg")
     for path in image_paths:
         image = Image.open(path)
+        
+        # --- 原图处理 ---
         success, pt1, pt2 = detector.detect(image)
+        img_orig = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        save_path2 = os.path.join("output2", os.path.basename(path))
 
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        save_path = os.path.join("output2", os.path.basename(path))
+        # --- 预处理图处理 ---
+        processed = detector.preprocess_image(image)
+        img_processed = cv2.cvtColor(np.array(processed), cv2.COLOR_RGB2BGR)
+        save_path3 = os.path.join("output3", os.path.basename(path))
 
         if success:
             print(f"{path} → 检测成功: {pt1}, {pt2}")
-            H, W = img_cv.shape[:2]
+            H, W = img_orig.shape[:2]
             cx, cy = W // 2, H // 2
             x1, y1 = int(cx + pt1[0]), int(cy - pt1[1])
             x2, y2 = int(cx + pt2[0]), int(cy - pt2[1])
-            cv2.circle(img_cv, (x1, y1), 6, (0, 0, 255), -1)  # 红点
-            cv2.circle(img_cv, (x2, y2), 6, (0, 255, 0), -1)  # 绿点
+            cv2.circle(img_orig, (x1, y1), 6, (0, 0, 255), -1)     # 红点（原图）
+            cv2.circle(img_orig, (x2, y2), 6, (0, 255, 0), -1)     # 绿点（原图）
+            cv2.circle(img_processed, (x1, y1), 6, (0, 0, 255), -1)  # 红点（处理图）
+            cv2.circle(img_processed, (x2, y2), 6, (0, 255, 0), -1)  # 绿点（处理图）
         else:
             print(f"{path} → 未检测到端点")
-            # 原图保存，无标记
 
-        cv2.imwrite(save_path, img_cv)  # 不管是否检测成功都保存
+        # 保存两张图
+        cv2.imwrite(save_path2, img_orig)
+        cv2.imwrite(save_path3, img_processed)
 
