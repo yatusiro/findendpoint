@@ -1,10 +1,11 @@
-def detect_endpoints(self, img_pil: Image.Image) -> Tuple[bool, Tuple[int, int]]:
+def detect_endpoints(self, img_pil: Image.Image) -> Tuple[bool, Tuple[int, int], Tuple[int, int]]:
     """
-    检测图像中的红色线段端点，并返回是否成功检测到 + 最接近中心的点（图像中心为原点的整数坐标）。
-    
+    检测图像中的红色线段端点，并返回是否成功检测到 + 最接近中心的点（图像中心为原点的整数坐标）+ 其对应端点。
+
     Returns:
         success: 是否检测到符合条件的端点
         point: (x, y) 坐标（以图像中心为原点），单位像素，int 类型
+        other_point: 与该点同属一条线段的另一个端点（也为以图像中心为原点的坐标）
     """
     bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
     H, W = bgr.shape[:2]
@@ -22,7 +23,7 @@ def detect_endpoints(self, img_pil: Image.Image) -> Tuple[bool, Tuple[int, int]]
                                minLineLength=self.min_len,
                                maxLineGap=self.max_gap)
     if segments is None:
-        return False, (None, None)
+        return False, (None, None), (None, None)
 
     segs = segments[:, 0]
     groups = []
@@ -48,6 +49,7 @@ def detect_endpoints(self, img_pil: Image.Image) -> Tuple[bool, Tuple[int, int]]
     bottom_band = (1 - self.edge_pct) * H
 
     closest_point = None
+    corresponding_point = None  # ← 新增变量
     min_dist = float('inf')
     side_threshold = self.side_pct * W / 2  # 图像中心坐标系下的边缘阈值
 
@@ -73,12 +75,21 @@ def detect_endpoints(self, img_pil: Image.Image) -> Tuple[bool, Tuple[int, int]]
         # 一个在边缘区域，一个在非边缘区域
         if in_edge1 ^ in_edge2:
             candidate = pt1 if not in_edge1 else pt2
+            other = pt2 if not in_edge1 else pt1  # ← 对应的端点
+
             dist = candidate[0] ** 2 + candidate[1] ** 2
             if dist < min_dist:
                 min_dist = dist
                 closest_point = candidate
+                corresponding_point = other
 
     if closest_point:
-        return True, (int(round(closest_point[0])), int(round(closest_point[1])))
+        return True, (
+            int(round(closest_point[0])),
+            int(round(closest_point[1]))
+        ), (
+            int(round(corresponding_point[0])),
+            int(round(corresponding_point[1]))
+        )
     else:
-        return False, (None, None)
+        return False, (None, None), (None, None)
